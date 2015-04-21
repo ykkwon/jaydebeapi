@@ -41,7 +41,7 @@ before_install:
 
 install:
   - if [ -n "$JDBC_DRIVER" ]; then mkdir classpath && export CLASSPATH=$PWD/classpath/*;fi
-  - if [ "$JDBC_DRIVER" == "mockdriver" ]; then (cd mockdriver && mvn package && mv target/mockdriver.jar $CLASSPATH/); elif [ -n "$JDBC_DRIVER" ]; then mv $(ci/mvnget.sh $JDBC_DRIVER) $CLASSPATH/;fi
+  - if [ "$JDBC_DRIVER" == "mockdriver" ]; then (cd mockdriver && mvn package && mv target/mockdriver.jar ../classpath/); elif [ -n "$JDBC_DRIVER" ]; then mv $(ci/mvnget.sh $JDBC_DRIVER) classpath/;fi
   - source $HOME/myvirtualenv/bin/activate
   - pip install -e .
   - pip install -r test-requirements.txt
