@@ -7,17 +7,17 @@
 # it under the terms of the GNU Lesser General Public License as
 # published by the Free Software Foundation, either version 3 of the
 # License, or (at your option) any later version.
-# 
+#
 # JayDeBeApi is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # Lesser General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Lesser General Public
 # License along with JayDeBeApi.  If not, see
 # <http://www.gnu.org/licenses/>.
 
-__version_info__ = (0, 2, 0)
+__version_info__ = (0, 2, 1)
 __version__ = ".".join(str(i) for i in __version_info__)
 
 import datetime
@@ -74,6 +74,35 @@ _java_array_byte = None
 
 _handle_sql_exception = None
 
+_dict_to_properties = None
+
+
+def _do_args_contain_properties(args):
+    return len(args) == 2 and isinstance(args[1], dict)
+
+
+def _prepair_arguments_for_driver(args):
+   if _do_args_contain_properties(args):
+       args = (args[0], _dict_to_properties(args[1]))
+   return args
+
+
+def _dict_to_properties_jython(some_dict):
+    from java.util import Properties
+    props = Properties()
+    for key in some_dict:
+        props.setProperty(key, some_dict[key])
+    return props
+
+def _dict_to_properties_jpype(some_dict):
+    from jpype import JPackage
+    java_utils = JPackage('java.util')
+    props = java_utils.Properties()
+    for key in some_dict:
+        props.setProperty(key, some_dict[key])
+    return props
+
+
 def _handle_sql_exception_jython():
     from java.sql import SQLException
     exc_info = sys.exc_info()
@@ -114,6 +143,7 @@ def _jdbc_connect_jython(jclassname, jars, libs, *args):
         _jython_set_classpath(jars)
         Class.forName(jclassname).newInstance()
     from java.sql import DriverManager
+    args = _prepair_arguments_for_driver(args)
     return DriverManager.getConnection(*args)
 
 def _jython_set_classpath(jars):
@@ -136,6 +166,9 @@ def _prepare_jython():
     _jdbc_connect = _jdbc_connect_jython
     global _handle_sql_exception
     _handle_sql_exception = _handle_sql_exception_jython
+    global _dict_to_properties
+    _dict_to_properties = _dict_to_properties_jython
+
 
 def _handle_sql_exception_jpype():
     import jpype
@@ -146,7 +179,7 @@ def _handle_sql_exception_jpype():
     else:
         exc_type = InterfaceError
     reraise(exc_type, exc_info[1], exc_info[2])
-    
+
 def _jdbc_connect_jpype(jclassname, jars, libs, *driver_args):
     import jpype
     if not jpype.isJVMStarted():
@@ -180,6 +213,7 @@ def _jdbc_connect_jpype(jclassname, jars, libs, *driver_args):
             return jpype.JArray(jpype.JByte, 1)(data)
     # register driver for DriverManager
     jpype.JClass(jclassname)
+    driver_args = _prepair_arguments_for_driver(driver_args)
     return jpype.java.sql.DriverManager.getConnection(*driver_args)
 
 def _get_classpath():
@@ -206,6 +240,9 @@ def _prepare_jpype():
     _jdbc_connect = _jdbc_connect_jpype
     global _handle_sql_exception
     _handle_sql_exception = _handle_sql_exception_jpype
+    global _dict_to_properties
+    _dict_to_properties = _dict_to_properties_jpype
+
 
 if sys.platform.lower().startswith('java'):
     _prepare_jython()
@@ -404,7 +441,7 @@ class Cursor(object):
 
     rowcount = -1
     _meta = None
-    _prep = None
+    _stmt = None
     _rs = None
     _description = None
 
@@ -452,9 +489,9 @@ class Cursor(object):
         if self._rs:
             self._rs.close()
         self._rs = None
-        if self._prep:
-            self._prep.close()
-        self._prep = None
+        if self._stmt:
+            self._stmt.close()
+        self._stmt = None
         self._meta = None
         self._description = None
 
@@ -462,41 +499,22 @@ class Cursor(object):
     # but I'm not sure when __del__ will be called
     __del__ = _close_last
 
-    def _set_stmt_parms(self, prep_stmt, parameters):
-        for i in range(len(parameters)):
-            # print (i, parameters[i], type(parameters[i]))
-            prep_stmt.setObject(i + 1, parameters[i])
-
-    def execute(self, operation, parameters=None):
+    def execute(self, operation):
         if self._connection._closed:
             raise Error()
-        if not parameters:
-            parameters = ()
         self._close_last()
-        self._prep = self._connection.jconn.prepareStatement(operation)
-        self._set_stmt_parms(self._prep, parameters)
+        self._stmt = self._connection.jconn.createStatement()
         try:
-            is_rs = self._prep.execute()
+            is_rs = self._stmt.executeQuery(operation)
         except:
             _handle_sql_exception()
         if is_rs:
-            self._rs = self._prep.getResultSet()
+            self._rs = self._stmt.getResultSet()
             self._meta = self._rs.getMetaData()
             self.rowcount = -1
         else:
-            self.rowcount = self._prep.getUpdateCount()
-        # self._prep.getWarnings() ???
-
-    def executemany(self, operation, seq_of_parameters):
-        self._close_last()
-        self._prep = self._connection.jconn.prepareStatement(operation)
-        for parameters in seq_of_parameters:
-            self._set_stmt_parms(self._prep, parameters)
-            self._prep.addBatch()
-        update_counts = self._prep.executeBatch()
-        # self._prep.getWarnings() ???
-        self.rowcount = sum(update_counts)
-        self._close_last()
+            self.rowcount = self._stmt.getUpdateCount()
+        # self._stmt.getWarnings() ???
 
     def fetchone(self):
         if not self._rs:
